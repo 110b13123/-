@@ -1,0 +1,235 @@
+import cv2
+import mediapipe as mp
+import pyautogui
+import math
+import numpy as np
+
+# 初始化 MediaPipe Hand 模型
+mp_hands = mp.solutions.hands
+hands = mp_hands.Hands(static_image_mode=False, max_num_hands=2, min_detection_confidence=0.5, min_tracking_confidence=0.5)
+
+# 手指节点索引
+FINGER_TIP_INDEX = [
+    mp_hands.HandLandmark.THUMB_TIP,
+    mp_hands.HandLandmark.INDEX_FINGER_TIP,
+    mp_hands.HandLandmark.MIDDLE_FINGER_TIP,
+    mp_hands.HandLandmark.RING_FINGER_TIP,
+    mp_hands.HandLandmark.PINKY_TIP
+]
+
+# 手指指根节点
+FINGER_MCP_INDEX = [
+    mp_hands.HandLandmark.THUMB_MCP,
+    mp_hands.HandLandmark.INDEX_FINGER_MCP,
+    mp_hands.HandLandmark.MIDDLE_FINGER_MCP,
+    mp_hands.HandLandmark.RING_FINGER_MCP,
+    mp_hands.HandLandmark.PINKY_MCP
+]
+
+# 初始化 PyAutoGUI
+pyautogui.FAILSAFE = False
+
+# 初始化绘图窗口类
+class DrawingWindow:
+    def __init__(self, width, height):
+        self.image = np.zeros((height, width, 3), np.uint8)
+        self.last_point = None
+
+    def draw(self, img):
+        img = cv2.flip(img, 1)
+        cv2.imshow('Drawing', self.image) # 绘图窗口
+        cv2.imshow('Camera', img)         # 摄像头窗口
+
+# 创建绘图窗口实例
+drawing_window = DrawingWindow(420, 240)
+
+# 初始化当前页数
+current_page = 1
+
+# 打开摄像头
+cap = cv2.VideoCapture(0)
+
+# 设置手势检测阈值
+VOLUME_INCREMENT = 1
+SCROLL_STEP = 50
+
+# 手指弯曲检测
+def is_finger_bent(landmarks, tip_idx, mcp_idx):
+    return landmarks[tip_idx].y > landmarks[mcp_idx].y
+
+# 定义平滑跟踪
+def smooth_position(last_pos, new_pos, smoothing_factor=0.1):
+    if last_pos is None:
+        return new_pos
+    return (
+        int(last_pos[0] * (1 - smoothing_factor) + new_pos[0] * smoothing_factor),
+        int(last_pos[1] * (1 - smoothing_factor) + new_pos[1] * smoothing_factor)
+    )
+
+# 手势处理主循环
+while cap.isOpened():
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    # 转换为 RGB
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    results = hands.process(frame_rgb)
+
+    if results.multi_hand_landmarks:
+        left_hand_gesture = None
+        right_hand_gesture = None
+
+        for idx, hand_landmarks in enumerate(results.multi_hand_landmarks):
+            handedness = results.multi_handedness[idx].classification[0].label
+
+            # 获取手指关节点位置
+            thumb_tip = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_TIP]
+            index_tip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
+            middle_tip = hand_landmarks.landmark[mp_hands.HandLandmark.MIDDLE_FINGER_TIP]
+
+            # X 和 Y 轴距离
+            x_distance = index_tip.x - thumb_tip.x
+            y_distance = index_tip.y - middle_tip.y
+
+            # 左手手势识别
+            if handedness == 'Left':
+                # 检查手指是否伸直
+                index_straight = not is_finger_bent(hand_landmarks.landmark, mp_hands.HandLandmark.INDEX_FINGER_TIP, mp_hands.HandLandmark.INDEX_FINGER_MCP)
+                middle_straight = not is_finger_bent(hand_landmarks.landmark, mp_hands.HandLandmark.MIDDLE_FINGER_TIP, mp_hands.HandLandmark.MIDDLE_FINGER_MCP)
+                ring_straight = not is_finger_bent(hand_landmarks.landmark, mp_hands.HandLandmark.RING_FINGER_TIP, mp_hands.HandLandmark.RING_FINGER_MCP)
+                pinky_straight = not is_finger_bent(hand_landmarks.landmark, mp_hands.HandLandmark.PINKY_TIP, mp_hands.HandLandmark.PINKY_MCP)
+                thumb_straight = not is_finger_bent(hand_landmarks.landmark, mp_hands.HandLandmark.THUMB_TIP, mp_hands.HandLandmark.THUMB_MCP)
+
+                if index_straight and not middle_straight and not ring_straight and not pinky_straight:
+                    left_hand_gesture = 1  # 左手比"1"
+                elif index_straight and middle_straight and not ring_straight and not pinky_straight:
+                    left_hand_gesture = 2  # 左手比"2"
+                elif index_straight and middle_straight and ring_straight and not pinky_straight:
+                    left_hand_gesture = 3  # 左手比"3"
+                elif index_straight and middle_straight and ring_straight and pinky_straight:
+                    left_hand_gesture = 4  # 左手比"4"
+                elif index_straight and middle_straight and ring_straight and pinky_straight and thumb_straight:
+                    left_hand_gesture = 5  # 左手比"5"
+                elif thumb_straight and pinky_straight and not index_straight and not middle_straight and not ring_straight:
+                    left_hand_gesture = 6  # 左手比"6"
+
+            # 右手执行功能
+            if handedness == 'Right' and left_hand_gesture:
+                
+                if left_hand_gesture == 1:  # 应用切换
+                    if x_distance > 0.05:
+                        pyautogui.hotkey('alt', 'tab')
+                    elif x_distance < -0.05:
+                        pyautogui.hotkey('alt', 'shift', 'tab')
+                        
+                
+            
+
+                elif left_hand_gesture == 2:  # 画图
+                    class DrawingWindow:
+                        def __init__(self, width, height):
+                            self.image = np.zeros((height, width, 3), np.uint8)
+                            self.last_point = None
+
+                        def draw(self, img):
+                            img = cv2.flip(img, 1)  # 鏡像水平翻轉
+                            cv2.imshow('oxxostudio', img)
+                            cv2.imshow('drawing', self.image)
+
+                    def main():
+                        cap = cv2.VideoCapture(0)  # 讀取攝影鏡頭
+                        w = 420
+                        h = 240
+
+                        if not cap.isOpened():
+                            print("Cannot open camera")
+                            exit()
+
+                        drawing_window = DrawingWindow(w, h)
+
+                        mp_hands = mp.solutions.hands
+                        hands = mp_hands.Hands(max_num_hands=1)
+
+                        while True:
+                            ret, img = cap.read()  # 讀取影片的每一個影格
+                            if not ret:
+                                print("Cannot receive frame")
+                                break
+                            img = cv2.resize(img, (w, h))  # 縮小尺寸，加快運算速度
+
+                            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                            results = hands.process(img_rgb)
+
+                            if results.multi_hand_landmarks:
+                                for hand_landmarks in results.multi_hand_landmarks:
+                                    index_finger_tip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
+                                    index_finger_tip_x = int(index_finger_tip.x * w)
+                                    index_finger_tip_y = int(index_finger_tip.y * h)
+
+                                    if drawing_window.last_point:
+                                        cv2.line(drawing_window.image, (drawing_window.last_point[0], drawing_window.last_point[1]), (index_finger_tip_x, index_finger_tip_y), (0, 0, 255), 2)
+                                    drawing_window.last_point = (index_finger_tip_x, index_finger_tip_y)
+
+                            drawing_window.draw(img)
+
+                            
+
+                elif left_hand_gesture == 3:  # 確保左手比「三」手勢
+                    # 檢測大拇指和食指的關節位置
+                    thumb_tip = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_TIP]
+                    index_tip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
+                
+                    # 計算大拇指和食指的距離
+                    distance = math.sqrt((thumb_tip.x - index_tip.x)**2 + (thumb_tip.y - index_tip.y)**2)
+                    
+                    # 根據距離調整音量
+                    if distance > 0.1:  # 調整閾值
+                        pyautogui.press('volumeup', presses=VOLUME_INCREMENT)  # 提高音量
+                    else:
+                        pyautogui.press('volumedown', presses=VOLUME_INCREMENT)  # 降低音量
+
+
+                    
+
+                elif left_hand_gesture == 4:  # 音乐控制
+                    # 计算大拇指和食指的X轴距离
+                   if results.multi_hand_landmarks:
+                       for hand_landmarks in results.multi_hand_landmarks:
+                           finger_tips = []
+                           for landmark in FINGER_TIP_INDEX:
+                               finger_tips.append(hand_landmarks.landmark[landmark])
+
+                            # 根据手势控制音乐播放
+                            if x_distance > 0.1:  # 向右，下一首
+                                pyautogui.press('nexttrack')
+                            elif x_distance < 0.1:  # 向左，上一首
+                                pyautogui.press('prevtrack')
+                  
+
+                elif left_hand_gesture == 5:  # 网页滚动
+                    if y_distance > 0.1:
+                        pyautogui.scroll(-SCROLL_STEP)
+                    elif y_distance < -0.1:
+                        pyautogui.scroll(SCROLL_STEP)
+                   
+
+                elif left_hand_gesture == 6:  # 简报翻页
+                    if x_distance > 0.1:
+                        pyautogui.press('right')
+                        current_page += 1
+                    elif x_distance < -0.1 and current_page > 1:
+                        pyautogui.press('left')
+                        current_page -= 1
+                    
+
+    # 显示画面
+    cv2.imshow('Hand Gesture Control', frame)
+
+    # 退出条件
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+# 释放资源
+cap.release()
+cv2.destroyAllWindows()
