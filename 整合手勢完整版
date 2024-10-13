@@ -1,0 +1,173 @@
+import cv2
+import mediapipe as mp
+import pyautogui
+import math
+import numpy as np
+
+# 初始化 MediaPipe Hand 模型
+mp_hands = mp.solutions.hands
+hands = mp_hands.Hands(static_image_mode=False, max_num_hands=2, min_detection_confidence=0.5, min_tracking_confidence=0.5)
+
+# 初始化 PyAutoGUI
+pyautogui.FAILSAFE = False
+
+# 初始化当前页数
+current_page = 1
+
+# 打开摄像头
+cap = cv2.VideoCapture(0)
+
+# 设置手势检测阈值
+VOLUME_INCREMENT = 1
+SCROLL_STEP = 50
+
+# 手指弯曲检测
+def is_finger_bent(landmarks, tip_idx, mcp_idx):
+    return landmarks[tip_idx].y > landmarks[mcp_idx].y + 0.02
+
+# 手指直立判断
+def is_finger_straight(landmarks, tip_idx, mcp_idx):
+    return landmarks[tip_idx].y < landmarks[mcp_idx].y - 0.05
+
+# 平滑位置
+def smooth_position(last_pos, new_pos, smoothing_factor=0.1):
+    if last_pos is None:
+        return new_pos
+    return (
+        int(last_pos[0] * (1 - smoothing_factor) + new_pos[0] * smoothing_factor),
+        int(last_pos[1] * (1 - smoothing_factor) + new_pos[1] * smoothing_factor)
+    )
+
+# 初始化绘图窗口类
+class DrawingWindow:
+    def __init__(self, width, height):
+        self.image = np.zeros((height, width, 3), np.uint8)  # 绘图窗口的黑色背景
+        self.last_point = None
+
+    def draw(self, img, new_pos):
+        img = cv2.flip(img, 1)
+        if self.last_point is not None and new_pos is not None:
+            smoothed_pos = smooth_position(self.last_point, new_pos)
+            cv2.line(self.image, self.last_point, smoothed_pos, (0, 0, 255), 2)
+            self.last_point = smoothed_pos
+        else:
+            self.last_point = new_pos
+
+        cv2.imshow('Drawing', self.image)
+
+# 创建绘图窗口实例
+drawing_window = DrawingWindow(640, 480)
+
+# 主循环
+while cap.isOpened():
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    # 转换为 RGB
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    results = hands.process(frame_rgb)
+
+    # 初始化手势值
+    left_hand_gesture = None
+    x_distance = 0
+    y_distance = 0  # 添加 y_distance 初始化
+
+    if results.multi_hand_landmarks:
+        for idx, hand_landmarks in enumerate(results.multi_hand_landmarks):
+            handedness = results.multi_handedness[idx].classification[0].label
+
+            # 获取手指关节点位置
+            thumb_tip = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_TIP]
+            index_tip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
+            middle_tip = hand_landmarks.landmark[mp_hands.HandLandmark.MIDDLE_FINGER_TIP]
+            ring_tip = hand_landmarks.landmark[mp_hands.HandLandmark.RING_FINGER_TIP]
+            pinky_tip = hand_landmarks.landmark[mp_hands.HandLandmark.PINKY_TIP]
+
+            # 在影像上畫出手指關節節點
+            for landmark in hand_landmarks.landmark:
+                h, w, _ = frame.shape
+                cx, cy = int(landmark.x * w), int(landmark.y * h)
+                cv2.circle(frame, (cx, cy), 5, (0, 255, 0), -1)  # 繪製關節點
+
+            # 左手手势识别
+            if handedness == 'Left':
+                index_straight = is_finger_straight(hand_landmarks.landmark, mp_hands.HandLandmark.INDEX_FINGER_TIP, mp_hands.HandLandmark.INDEX_FINGER_MCP)
+                middle_straight = is_finger_straight(hand_landmarks.landmark, mp_hands.HandLandmark.MIDDLE_FINGER_TIP, mp_hands.HandLandmark.MIDDLE_FINGER_MCP)
+                ring_straight = is_finger_straight(hand_landmarks.landmark, mp_hands.HandLandmark.RING_FINGER_TIP, mp_hands.HandLandmark.RING_FINGER_MCP)
+                pinky_straight = is_finger_straight(hand_landmarks.landmark, mp_hands.HandLandmark.PINKY_TIP, mp_hands.HandLandmark.PINKY_MCP)
+                thumb_straight = is_finger_straight(hand_landmarks.landmark, mp_hands.HandLandmark.THUMB_TIP, mp_hands.HandLandmark.THUMB_MCP)
+
+                # 判斷手勢
+                if index_straight and not middle_straight and not ring_straight and not pinky_straight and not thumb_straight:
+                    left_hand_gesture = 1  # 左手比"1"
+                elif index_straight and middle_straight and not ring_straight and not pinky_straight and not thumb_straight:
+                    left_hand_gesture = 2  # 左手比"2"
+                elif index_straight and middle_straight and ring_straight and not pinky_straight and not thumb_straight:
+                    left_hand_gesture = 3  # 左手比"3"
+                elif index_straight and middle_straight and ring_straight and pinky_straight and not thumb_straight:
+                    left_hand_gesture = 4  # 左手比"4"
+                elif index_straight and middle_straight and ring_straight and pinky_straight and thumb_straight:
+                    left_hand_gesture = 5  # 左手比"5"
+                elif thumb_straight and pinky_straight and not index_straight and not middle_straight and not ring_straight:
+                    left_hand_gesture = 6  # 左手比"6"
+
+            # 右手功能操作
+            if handedness == 'Right' and left_hand_gesture is not None:
+                x_distance = index_tip.x - thumb_tip.x
+                y_distance = index_tip.y - middle_tip.y
+
+                if left_hand_gesture == 1:  # 应用切换
+                    if x_distance > 0.1:
+                        pyautogui.hotkey('alt', 'tab')
+                    elif x_distance < -0.1:
+                        pyautogui.hotkey('alt', 'shift', 'tab')
+
+                elif left_hand_gesture == 2:  # 画图功能
+                    new_pos = (int(index_tip.x * drawing_window.image.shape[1]), int(index_tip.y * drawing_window.image.shape[0]))
+                    drawing_window.draw(frame, new_pos)
+
+                elif left_hand_gesture == 3:  # 音量控制
+                    distance = math.sqrt((thumb_tip.x - index_tip.x)**2 + (thumb_tip.y - index_tip.y)**2)
+                    if distance > 0.1:
+                        pyautogui.press('volumeup', presses=VOLUME_INCREMENT)
+                    else:
+                        pyautogui.press('volumedown', presses=VOLUME_INCREMENT)
+
+                elif left_hand_gesture == 4:  # 音乐控制
+                    if x_distance > 0.1:
+                        pyautogui.press('nexttrack')
+                    elif x_distance < -0.1:
+                        pyautogui.press('prevtrack')
+
+                elif left_hand_gesture == 5:  # 网页滚动
+                    if y_distance > 0.1:
+                        pyautogui.scroll(-SCROLL_STEP)
+                    elif y_distance < -0.1:
+                        pyautogui.scroll(SCROLL_STEP)
+
+                elif left_hand_gesture == 6:  # 简报翻页
+                    if x_distance > 0.1:
+                        pyautogui.press('right')
+                        current_page += 1
+                    elif x_distance < -0.1:
+                        pyautogui.press('left')
+                        current_page = max(1, current_page - 1)
+
+    # 显示手势检测结果
+    if left_hand_gesture is not None:
+        cv2.putText(frame, f'Left Hand Gesture: {left_hand_gesture}', (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
+    if results.multi_handedness:
+        cv2.putText(frame, f'X Distance: {x_distance:.2f}', (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
+        cv2.putText(frame, f'Y Distance: {y_distance:.2f}', (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)  # 添加 Y Distance 的顯示
+
+    # 显示摄像头画面
+    cv2.imshow('Hand Gesture Control', frame)
+
+    # 退出条件
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+# 释放资源
+cap.release()
+cv2.destroyAllWindows()
